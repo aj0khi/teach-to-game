@@ -11,6 +11,7 @@ dependencies = [
     "gymnasium>=1.0",
     "numpy>=2.0",
     "pygame>=2.5",
+    "stable-baselines3>=2.4",
 ]
 
 [project.optional-dependencies]

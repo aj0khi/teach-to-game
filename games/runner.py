@@ -38,8 +38,8 @@ class RunnerEnv(GameEnv):
         self.fast_mode = fast_mode
         self.action_space = gym.spaces.Discrete(2)
         self.observation_space = gym.spaces.Box(
-            low=np.array([0.0, -1.0, 0.0, 0.0], dtype=np.float32),
-            high=np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32),
+            low=np.array([0.0, -1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+            high=np.array([1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32),
             dtype=np.float32,
         )
         self._rng = np.random.default_rng(seed)
@@ -86,8 +86,11 @@ class RunnerEnv(GameEnv):
         self._steps += 1
         collision = self._collides()
         self._terminated = collision
-        truncated = self._steps >= 2_000
+        truncated = self._steps >= 600
+        obstacle_distance = self._next_obstacle().x - self._distance
         reward = -1.0 if collision else 0.08
+        if not collision and 0.0 <= obstacle_distance <= 0.8 and self._player_y > 0.2:
+            reward += 0.3
         if truncated:
             self._terminated = True
         if not self.fast_mode:
@@ -148,8 +151,9 @@ class RunnerEnv(GameEnv):
             [
                 self._player_y,
                 np.clip(self._velocity / 0.42, -1.0, 1.0),
-                np.clip((obstacle.x - self._distance) / 4.5, 0.0, 1.0),
+                np.clip((obstacle.x - self._distance) / 8.0, 0.0, 1.0),
                 obstacle.width,
+                float(0.0 <= obstacle.x - self._distance <= 0.5),
             ],
             dtype=np.float32,
         )
