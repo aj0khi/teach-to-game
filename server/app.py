@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from collections import deque
 from pathlib import Path
 from typing import Any
@@ -12,8 +13,50 @@ import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from stable_baselines3 import PPO
+from stable_baselines3.common.callbacks import BaseCallback
 
 from games.registry import BUILTIN_GAMES, create_game
+
+
+class LiveTrainingCallback(BaseCallback):
+    """Publish the exact PPO transitions being trained on."""
+
+    def __init__(self, controller: TrainingController) -> None:
+        super().__init__()
+        self.controller = controller
+        self.attempt = 0
+        self.attempt_steps = 0
+        self.attempt_reward = 0.0
+
+    def _on_step(self) -> bool:
+        """Stream a rendered observation and stop/pause at a safe step boundary."""
+        if self.controller._stop.is_set():
+            return False
+        while self.controller._pause.is_set() and not self.controller._stop.is_set():
+            self.controller._stop.wait(0.05)
+        if self.controller._stop.is_set():
+            return False
+
+        action = int(np.asarray(self.locals["actions"]).reshape(-1)[0])
+        reward = float(np.asarray(self.locals["rewards"]).reshape(-1)[0])
+        info = self.locals["infos"][0]
+        self.attempt_steps += 1
+        self.attempt_reward += reward
+        if self.attempt_steps % 2 == 0 or self.locals["dones"][0]:
+            frame = self.training_env.env_method("render")[0]
+            self.controller.publish_frame(frame, action, reward, info.get("score", 0.0))
+            time.sleep(0.04)
+        if self.locals["dones"][0]:
+            self.attempt += 1
+            self.controller.publish_attempt(
+                self.attempt,
+                self.attempt_steps,
+                self.attempt_reward,
+                float(info.get("score", 0.0)),
+            )
+            self.attempt_steps = 0
+            self.attempt_reward = 0.0
+        return True
 
 
 class TrainingController:
@@ -119,75 +162,88 @@ class TrainingController:
             else:
                 self._events.append(event)
 
+    def publish_frame(
+        self, frame: np.ndarray, action: int, reward: float, score: float
+    ) -> None:
+        """Publish a current RGB frame and the transition that produced it."""
+        if frame.shape[1] > 160:
+            frame = frame[::2, ::2]
+        self._publish(
+            {
+                "type": "frame",
+                "width": int(frame.shape[1]),
+                "height": int(frame.shape[0]),
+                "pixels": np.asarray(frame, dtype=np.uint8).tobytes().hex(),
+                "action": action,
+                "reward": reward,
+                "score": score,
+            }
+        )
+
+    def publish_attempt(
+        self, attempt: int, steps: int, reward: float, score: float
+    ) -> None:
+        """Publish a completed attempt from the actual environment rollout."""
+        self._attempt = attempt
+        self._publish(
+            {
+                "type": "attempt",
+                "attempt": attempt,
+                "steps": steps,
+                "reward": reward,
+                "score": score,
+                "goal": self.get_setup()["goal"],
+            }
+        )
+
     def _train(self) -> None:
-        """Train one controller-owned model and publish attempt metrics."""
+        """Train one controller-owned model on the same frames being streamed."""
         setup = self.get_setup()
         environment = create_game(setup["game"])
-        model = (
-            PPO("MlpPolicy", environment, n_steps=128, batch_size=32, verbose=0)
-            if setup["algorithm"] == "ppo"
-            else None
-        )
         try:
-            for _ in range(100):
-                if self._stop.is_set():
-                    break
-                while self._pause.is_set() and not self._stop.is_set():
-                    self._stop.wait(0.05)
-                observation, _ = environment.reset()
-                reward_total = 0.0
-                steps = 0
-                info: dict[str, Any] = {"score": 0.0}
-                while steps < 600 and not self._stop.is_set():
-                    action = (
-                        environment.action_space.sample()
-                        if model is None
-                        else model.predict(observation, deterministic=False)[0]
-                    )
-                    observation, reward, terminated, truncated, info = environment.step(
-                        int(action)
-                    )
-                    reward_total += reward
-                    steps += 1
-                    if steps % 3 == 0 or terminated or truncated:
-                        frame = environment.render()
-                        if frame.shape[1] > 160:
-                            frame = frame[::2, ::2]
-                        self._publish(
-                            {
-                                "type": "frame",
-                                "width": int(frame.shape[1]),
-                                "height": int(frame.shape[0]),
-                                "pixels": np.asarray(frame, dtype=np.uint8)
-                                .tobytes()
-                                .hex(),
-                                "action": int(action),
-                                "reward": reward,
-                                "score": info["score"],
-                            }
-                        )
-                    if terminated or truncated:
-                        break
-                environment.reset()
-                if model is not None:
-                    model.learn(
-                        total_timesteps=max(1, steps), reset_num_timesteps=False
-                    )
-                self._attempt += 1
-                self._publish(
-                    {
-                        "type": "attempt",
-                        "attempt": self._attempt,
-                        "steps": steps,
-                        "reward": reward_total,
-                        "score": info["score"],
-                        "goal": setup["goal"],
-                    }
+            if setup["algorithm"] == "ppo":
+                model = PPO(
+                    "MlpPolicy", environment, n_steps=128, batch_size=32, verbose=0
                 )
+                model.learn(
+                    total_timesteps=100_000,
+                    callback=LiveTrainingCallback(self),
+                )
+            else:
+                self._run_random(environment)
         finally:
             environment.close()
             with self._lock:
                 self._status = "stopped"
+
+    def _run_random(self, environment: Any) -> None:
+        """Run the explicit random baseline with the same live stream."""
+        for _ in range(100):
+            if self._stop.is_set():
+                break
+            observation, _ = environment.reset()
+            reward_total = 0.0
+            steps = 0
+            info: dict[str, Any] = {"score": 0.0}
+            while steps < 600 and not self._stop.is_set():
+                action = int(environment.action_space.sample())
+                (
+                    observation,
+                    reward,
+                    terminated,
+                    truncated,
+                    info,
+                ) = environment.step(action)
+                reward_total += reward
+                steps += 1
+                if steps % 2 == 0 or terminated or truncated:
+                    self.publish_frame(
+                        environment.render(), action, reward, info["score"]
+                    )
+                    time.sleep(0.04)
+                if terminated or truncated:
+                    break
+            self.publish_attempt(self._attempt + 1, steps, reward_total, info["score"])
 
 
 app = FastAPI(title="Teach to Game")
