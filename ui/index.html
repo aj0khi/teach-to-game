@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Teach to Game</title>
+    <style>
+      body { font: 16px system-ui, sans-serif; margin: 2rem auto; max-width: 60rem; padding: 0 1rem; }
+      button { margin-right: .5rem; padding: .5rem .8rem; }
+      #status { font-weight: 700; }
+      canvas { border: 1px solid #aaa; display: block; height: 18rem; margin-top: 1rem; width: 100%; }
+      li { margin: .25rem 0; }
+    </style>
+  </head>
+  <body>
+    <h1>Teach to Game</h1>
+    <p>Status: <span id="status">stopped</span></p>
+    <button data-command="start">Start</button>
+    <button data-command="pause">Pause</button>
+    <button data-command="resume">Resume</button>
+    <button data-command="stop">Stop</button>
+    <canvas id="chart" width="800" height="280"></canvas>
+    <h2>Attempts</h2>
+    <ol id="attempts"></ol>
+    <script>
+      const status = document.querySelector("#status");
+      const attempts = document.querySelector("#attempts");
+      const chart = document.querySelector("#chart");
+      const values = [];
+      for (const button of document.querySelectorAll("button")) {
+        button.onclick = async () => {
+          const response = await fetch(`/api/${button.dataset.command}`, { method: "POST" });
+          status.textContent = (await response.json()).status;
+        };
+      }
+      const socket = new WebSocket(`ws://${location.host}/ws`);
+      socket.onmessage = (message) => {
+        const event = JSON.parse(message.data);
+        if (event.type !== "attempt") return;
+        values.push(event.reward);
+        const item = document.createElement("li");
+        item.textContent = `Attempt ${event.attempt}: ${event.steps} steps, reward ${event.reward.toFixed(2)}`;
+        attempts.prepend(item);
+        const context = chart.getContext("2d");
+        context.clearRect(0, 0, chart.width, chart.height);
+        context.beginPath();
+        values.forEach((value, index) => {
+          const x = index * chart.width / Math.max(values.length - 1, 1);
+          const y = chart.height - Math.max(0, value) * 2;
+          index ? context.lineTo(x, y) : context.moveTo(x, y);
+        });
+        context.stroke();
+      };
+    </script>
+  </body>
+</html>
