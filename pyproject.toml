@@ -15,6 +15,9 @@ dev = [
     "ruff>=0.6",
 ]
 
+[tool.setuptools.packages.find]
+include = ["learner", "games", "server"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["-ra"]
