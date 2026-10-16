@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import platform
+from importlib import import_module
+from importlib.util import find_spec
 
 
 def cuda_available() -> bool:
     """Return whether the optional PyTorch installation can use CUDA."""
-    try:
-        import torch
-    except ImportError:
+    if find_spec("torch") is None:
         return False
+    torch = import_module("torch")
     return bool(torch.cuda.is_available())
 
 

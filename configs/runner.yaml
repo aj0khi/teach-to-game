@@ -1,0 +1,14 @@
+name: Practice Runner
+kind: builtin
+source:
+  type: runner
+capture:
+  frame_size: [84, 84]
+actions:
+  - name: nothing
+    keys: []
+  - name: jump
+    keys: [space]
+limits:
+  max_episode_seconds: 66
+  step_hz: 30

@@ -7,7 +7,11 @@ name = "teach-to-game"
 version = "0.1.0"
 description = "A local app for watching reinforcement-learning agents learn games"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "gymnasium>=1.0",
+    "numpy>=2.0",
+    "pygame>=2.5",
+]
 
 [project.optional-dependencies]
 dev = [
