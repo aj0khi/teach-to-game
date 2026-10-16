@@ -19,10 +19,10 @@ BUILTIN_GAMES = {
 }
 
 
-def create_game(game_id: str, *, fast_mode: bool = True) -> Any:
+def create_game(game_id: str, *, fast_mode: bool = True, target_score: int = 0) -> Any:
     """Create a configured built-in game by its stable identifier."""
     if game_id == "runner":
         return RunnerEnv(fast_mode=fast_mode)
     if game_id == "snake":
-        return SnakeEnv()
+        return SnakeEnv(target_score=target_score)
     raise ValueError(f"Unknown built-in game: {game_id}")

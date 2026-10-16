@@ -1,7 +1,7 @@
 # Teach to Game
 
 Teach to Game is a local reinforcement-learning lab. It lets you choose a
-game, describe the goal, set a baseline, and watch an agent improve without
+game, describe the goal, set a target score, and watch an agent improve without
 sending training data to a cloud service.
 
 ## Quick start
@@ -17,6 +17,10 @@ python3 -m venv .venv
 Open <http://127.0.0.1:8765>. Choose **Snake**, save the goal, and press
 **Start learning**. Snake and the runner are self-contained practice games, so
 they work on a fresh laptop without a separate game installation.
+
+For Snake, the target score is a real episode objective: each apple adds one
+segment, and reaching the target completes the episode successfully. A target
+of zero means there is no score cutoff; it does not add segments automatically.
 
 ## Connecting a real game
 

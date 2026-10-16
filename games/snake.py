@@ -19,14 +19,18 @@ class SnakeEnv(GameEnv):
         self,
         *,
         grid_size: int = 10,
+        target_score: int = 0,
         render_mode: str | None = None,
         seed: int | None = None,
     ) -> None:
         if grid_size < 5:
             raise ValueError("grid_size must be at least 5")
+        if target_score < 0:
+            raise ValueError("target_score must be non-negative")
         if render_mode not in (None, "rgb_array"):
             raise ValueError(f"Unsupported render mode: {render_mode}")
         self.grid_size = grid_size
+        self.target_score = target_score
         self.render_mode = render_mode
         self.action_space = gym.spaces.Discrete(4)
         self.observation_space = gym.spaces.Box(
@@ -58,7 +62,7 @@ class SnakeEnv(GameEnv):
         self._score = 0
         self._terminated = False
         self._place_food()
-        return self._observation(), {"score": self._score}
+        return self._observation(), self._info()
 
     def step(self, action: int) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
         """Move the snake one cell and return the standard game contract."""
@@ -87,9 +91,12 @@ class SnakeEnv(GameEnv):
         else:
             self._snake.pop()
         truncated = self._steps >= self.grid_size * self.grid_size * 4
-        self._terminated = truncated
+        target_reached = self.target_score > 0 and self._score >= self.target_score
+        self._terminated = truncated or target_reached
         reward = 1.0 if ate_food else 0.01
-        return self._observation(), reward, False, truncated, self._info()
+        if target_reached:
+            reward += 1.0
+        return self._observation(), reward, target_reached, truncated, self._info()
 
     def render(self) -> np.ndarray:
         """Return a simple RGB board suitable for the dashboard."""
@@ -160,4 +167,11 @@ class SnakeEnv(GameEnv):
 
     def _info(self) -> dict[str, Any]:
         """Return viewer-friendly game metrics."""
-        return {"score": self._score, "length": len(self._snake), "steps": self._steps}
+        return {
+            "score": self._score,
+            "length": len(self._snake),
+            "steps": self._steps,
+            "target_score": self.target_score,
+            "target_reached": self.target_score > 0
+            and self._score >= self.target_score,
+        }

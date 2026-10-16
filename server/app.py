@@ -41,10 +41,18 @@ class LiveTrainingCallback(BaseCallback):
         reward = float(np.asarray(self.locals["rewards"]).reshape(-1)[0])
         info = self.locals["infos"][0]
         self.attempt_steps += 1
+        self.controller._game_steps += 1
         self.attempt_reward += reward
         if self.attempt_steps % 2 == 0 or self.locals["dones"][0]:
             frame = self.training_env.env_method("render")[0]
-            self.controller.publish_frame(frame, action, reward, info.get("score", 0.0))
+            self.controller.publish_frame(
+                frame,
+                action,
+                reward,
+                float(info.get("score", 0.0)),
+                int(info.get("length", 0)),
+                self.attempt_steps,
+            )
             time.sleep(self.controller.frame_delay())
         if self.locals["dones"][0]:
             self.attempt += 1
@@ -53,6 +61,7 @@ class LiveTrainingCallback(BaseCallback):
                 self.attempt_steps,
                 self.attempt_reward,
                 float(info.get("score", 0.0)),
+                int(info.get("length", 2)),
             )
             time.sleep(0.8 / self.controller.watch_speed)
             self.attempt_steps = 0
@@ -71,6 +80,10 @@ class TrainingController:
         self._events: deque[dict[str, Any]] = deque(maxlen=100)
         self._latest_frame: dict[str, Any] | None = None
         self._attempt = 0
+        self._started_at: float | None = None
+        self._game_steps = 0
+        self._best_score = 0.0
+        self._target_beaten = False
         self._status = "stopped"
         self._watch_speed = 1.0
         self._setup: dict[str, Any] = {
@@ -94,6 +107,10 @@ class TrainingController:
             self._pause.clear()
             self._stop.clear()
             self._status = "running"
+            self._started_at = time.monotonic()
+            self._game_steps = 0
+            self._best_score = 0.0
+            self._target_beaten = False
             self._thread = threading.Thread(target=self._train, daemon=True)
             self._thread.start()
 
@@ -119,6 +136,25 @@ class TrainingController:
             self._thread.join(timeout=1.0)
         with self._lock:
             self._status = "stopped"
+
+    def elapsed_seconds(self) -> float:
+        """Return real time elapsed in the active or most recent session."""
+        if self._started_at is None:
+            return 0.0
+        return max(0.0, time.monotonic() - self._started_at)
+
+    def session_metrics(self) -> dict[str, Any]:
+        """Return live experiment metrics for the dashboard header."""
+        setup = self.get_setup()
+        target = float(setup["baseline"])
+        return {
+            "attempt": self._attempt,
+            "game_steps": self._game_steps,
+            "elapsed_seconds": round(self.elapsed_seconds(), 1),
+            "best_score": self._best_score,
+            "target_score": target,
+            "target_beaten": self._target_beaten,
+        }
 
     def snapshot(self) -> list[dict[str, Any]]:
         """Return and clear queued events for a WebSocket client."""
@@ -183,7 +219,13 @@ class TrainingController:
                 self._events.append(event)
 
     def publish_frame(
-        self, frame: np.ndarray, action: int, reward: float, score: float
+        self,
+        frame: np.ndarray,
+        action: int,
+        reward: float,
+        score: float,
+        length: int = 0,
+        steps: int = 0,
     ) -> None:
         """Publish a current RGB frame and the transition that produced it."""
         if frame.shape[1] > 160:
@@ -197,14 +239,20 @@ class TrainingController:
                 "action": action,
                 "reward": reward,
                 "score": score,
+                "length": length,
+                "steps": steps,
+                "target_score": self.get_setup()["baseline"],
             }
         )
 
     def publish_attempt(
-        self, attempt: int, steps: int, reward: float, score: float
+        self, attempt: int, steps: int, reward: float, score: float, length: int
     ) -> None:
         """Publish a completed attempt from the actual environment rollout."""
         self._attempt = attempt
+        self._best_score = max(self._best_score, score)
+        target = float(self.get_setup()["baseline"])
+        self._target_beaten = target > 0 and self._best_score >= target
         self._publish(
             {
                 "type": "attempt",
@@ -212,6 +260,12 @@ class TrainingController:
                 "steps": steps,
                 "reward": reward,
                 "score": score,
+                "length": length,
+                "target_score": self.get_setup()["baseline"],
+                "elapsed_seconds": round(self.elapsed_seconds(), 1),
+                "game_steps": self._game_steps,
+                "best_score": self._best_score,
+                "target_beaten": self._target_beaten,
                 "goal": self.get_setup()["goal"],
             }
         )
@@ -219,8 +273,17 @@ class TrainingController:
     def _train(self) -> None:
         """Train one controller-owned model on the same frames being streamed."""
         setup = self.get_setup()
-        environment = create_game(setup["game"])
+        environment = create_game(setup["game"], target_score=int(setup["baseline"]))
         try:
+            observation, info = environment.reset()
+            self.publish_frame(
+                environment.render(),
+                action=-1,
+                reward=0.0,
+                score=float(info.get("score", 0.0)),
+                length=int(info.get("length", 0)),
+                steps=int(info.get("steps", 0)),
+            )
             if setup["algorithm"] == "ppo":
                 model = PPO(
                     "MlpPolicy", environment, n_steps=128, batch_size=32, verbose=0
@@ -244,7 +307,7 @@ class TrainingController:
             observation, _ = environment.reset()
             reward_total = 0.0
             steps = 0
-            info: dict[str, Any] = {"score": 0.0}
+            info: dict[str, Any] = {"score": 0.0, "length": 0, "steps": 0}
             while steps < 600 and not self._stop.is_set():
                 action = int(environment.action_space.sample())
                 (
@@ -256,14 +319,26 @@ class TrainingController:
                 ) = environment.step(action)
                 reward_total += reward
                 steps += 1
+                self._game_steps += 1
                 if steps % 2 == 0 or terminated or truncated:
                     self.publish_frame(
-                        environment.render(), action, reward, info["score"]
+                        environment.render(),
+                        action,
+                        reward,
+                        info["score"],
+                        int(info.get("length", 0)),
+                        steps,
                     )
                     time.sleep(self.frame_delay())
                 if terminated or truncated:
                     break
-            self.publish_attempt(self._attempt + 1, steps, reward_total, info["score"])
+            self.publish_attempt(
+                self._attempt + 1,
+                steps,
+                reward_total,
+                info["score"],
+                int(info.get("length", 0)),
+            )
             time.sleep(0.8 / self.watch_speed)
 
 
@@ -285,6 +360,7 @@ def status() -> dict[str, Any]:
         "status": controller.status,
         "setup": controller.get_setup(),
         "watch_speed": controller.watch_speed,
+        "session": controller.session_metrics(),
     }
 
 
