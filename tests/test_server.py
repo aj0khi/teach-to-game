@@ -29,6 +29,7 @@ def test_training_controls_change_status() -> None:
 
 def test_setup_can_select_snake_and_random_baseline() -> None:
     """The setup API persists game, algorithm, goal, and baseline selections."""
+    controller.stop()
     with TestClient(app) as client:
         response = client.post(
             "/api/setup",
@@ -46,3 +47,11 @@ def test_setup_can_select_snake_and_random_baseline() -> None:
         "goal": "Beat five points",
         "baseline": 5.0,
     }
+
+
+def test_frame_events_keep_only_the_newest_frame() -> None:
+    """A slow browser receives a current frame without blocking training."""
+    controller._publish({"type": "frame", "pixels": "old"})
+    controller._publish({"type": "frame", "pixels": "new"})
+    events = controller.snapshot()
+    assert events == [{"type": "frame", "pixels": "new"}]

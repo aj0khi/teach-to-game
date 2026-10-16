@@ -24,6 +24,10 @@
       .metrics { display: grid; gap: .75rem; grid-template-columns: repeat(3, 1fr); margin: 1rem 0; }
       .metric { background: #101620; border-radius: 12px; padding: .8rem; } .metric strong { display: block; font-size: 1.5rem; }
       canvas { background: #0c1119; border: 1px solid #2d384b; border-radius: 12px; display: block; height: 300px; width: 100%; }
+      .live-view { background: #0c1119; border: 1px solid #2d384b; border-radius: 12px; margin: 1rem 0; padding: .8rem; }
+      .live-view > div { color: var(--accent); font-size: .78rem; font-weight: 750; letter-spacing: .08em; }
+      .live-view canvas { background: #080b10; height: auto; image-rendering: pixelated; margin: .6rem auto; max-height: 300px; max-width: 100%; width: auto; }
+      .live-dot { background: #73e0a2; border-radius: 50%; display: inline-block; height: .55rem; margin-right: .35rem; width: .55rem; }
       ol { max-height: 14rem; overflow: auto; padding-left: 1.4rem; } li { margin: .4rem 0; }
       .notice { background: #2b2414; border: 1px solid #80672f; border-radius: 10px; color: #f4d78e; padding: .75rem; }
       @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } header { align-items: start; display: block; } }
@@ -59,6 +63,7 @@
             <button class="primary" data-command="start">Start learning</button>
             <button data-command="pause">Pause</button><button data-command="resume">Resume</button><button data-command="stop">Stop</button>
           </div>
+          <div class="live-view"><div><span class="live-dot"></span> LIVE GAME VIEW</div><canvas id="game" width="300" height="300"></canvas><p id="action">Waiting for the first action…</p></div>
           <canvas id="chart" width="900" height="300"></canvas>
           <h2>Recent attempts</h2><ol id="attempts"></ol>
         </section>
@@ -77,7 +82,8 @@
       for (const button of document.querySelectorAll("[data-command]")) button.onclick = async () => { const response = await fetch(`/api/${button.dataset.command}`, {method: "POST"}); $("#status").textContent = (await response.json()).status; };
       $("#game").onchange = () => { $("#game-title").textContent = `${$("#game").selectedOptions[0].textContent.split(" — ")[0]} dashboard`; };
       const socket = new WebSocket(`ws://${location.host}/ws`);
-      socket.onmessage = (message) => { const event = JSON.parse(message.data); if (event.type !== "attempt") return; values.push(event.reward); best = Math.max(best, event.score); $("#attempt-count").textContent = event.attempt; $("#best-score").textContent = best.toFixed(1); $("#last-reward").textContent = event.reward.toFixed(2); const item = document.createElement("li"); item.textContent = `Attempt ${event.attempt}: score ${event.score.toFixed(1)}, reward ${event.reward.toFixed(2)}`; $("#attempts").prepend(item); draw(); };
+      socket.onmessage = (message) => { const event = JSON.parse(message.data); if (event.type === "frame") drawFrame(event); if (event.type !== "attempt") return; values.push(event.reward); best = Math.max(best, event.score); $("#attempt-count").textContent = event.attempt; $("#best-score").textContent = best.toFixed(1); $("#last-reward").textContent = event.reward.toFixed(2); const item = document.createElement("li"); item.textContent = `Attempt ${event.attempt}: score ${event.score.toFixed(1)}, reward ${event.reward.toFixed(2)}`; $("#attempts").prepend(item); draw(); };
+      function drawFrame(event) { const bytes = new Uint8Array(event.pixels.match(/../g).map((value) => parseInt(value, 16))); const image = new ImageData(new Uint8ClampedArray(bytes), event.width, event.height); const canvas = $("#game"), context = canvas.getContext("2d"); canvas.width = event.width; canvas.height = event.height; context.putImageData(image, 0, 0); $("#action").textContent = `Action ${event.action} · reward ${event.reward.toFixed(2)} · score ${event.score.toFixed(1)}`; }
       function draw() { const canvas = $("#chart"), context = canvas.getContext("2d"); context.clearRect(0, 0, canvas.width, canvas.height); context.strokeStyle = "#73e0a2"; context.lineWidth = 3; context.beginPath(); values.forEach((value, index) => { const x = index * canvas.width / Math.max(values.length - 1, 1); const y = canvas.height - Math.max(0, value) * 2 - 10; index ? context.lineTo(x, y) : context.moveTo(x, y); }); context.stroke(); }
       loadSetup();
     </script>

@@ -8,6 +8,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from stable_baselines3 import PPO
@@ -24,6 +25,7 @@ class TrainingController:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._events: deque[dict[str, Any]] = deque(maxlen=100)
+        self._latest_frame: dict[str, Any] | None = None
         self._attempt = 0
         self._status = "stopped"
         self._setup: dict[str, Any] = {
@@ -78,11 +80,18 @@ class TrainingController:
         with self._lock:
             events = list(self._events)
             self._events.clear()
+            if self._latest_frame is not None:
+                events.append(self._latest_frame)
+                self._latest_frame = None
         return events
 
     def setup(self, values: dict[str, Any]) -> dict[str, Any]:
         """Validate and store the setup wizard selections."""
-        if self._thread is not None and self._thread.is_alive():
+        if (
+            self._thread is not None
+            and self._thread.is_alive()
+            and not self._stop.is_set()
+        ):
             raise RuntimeError("Stop training before changing the setup")
         game = str(values.get("game", "snake"))
         algorithm = str(values.get("algorithm", "ppo"))
@@ -105,7 +114,10 @@ class TrainingController:
     def _publish(self, event: dict[str, Any]) -> None:
         """Append an event while dropping stale events when clients lag."""
         with self._lock:
-            self._events.append(event)
+            if event["type"] == "frame":
+                self._latest_frame = event
+            else:
+                self._events.append(event)
 
     def _train(self) -> None:
         """Train one controller-owned model and publish attempt metrics."""
@@ -137,6 +149,23 @@ class TrainingController:
                     )
                     reward_total += reward
                     steps += 1
+                    if steps % 3 == 0 or terminated or truncated:
+                        frame = environment.render()
+                        if frame.shape[1] > 160:
+                            frame = frame[::2, ::2]
+                        self._publish(
+                            {
+                                "type": "frame",
+                                "width": int(frame.shape[1]),
+                                "height": int(frame.shape[0]),
+                                "pixels": np.asarray(frame, dtype=np.uint8)
+                                .tobytes()
+                                .hex(),
+                                "action": int(action),
+                                "reward": reward,
+                                "score": info["score"],
+                            }
+                        )
                     if terminated or truncated:
                         break
                 environment.reset()
