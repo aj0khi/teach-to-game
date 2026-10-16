@@ -23,6 +23,8 @@ dev = [
     "ruff>=0.6",
     "httpx2>=0.1",
 ]
+browser = ["playwright>=1.48", "pillow>=10.0"]
+desktop = ["mss>=9.0", "pyautogui>=0.9", "pillow>=10.0"]
 
 [tool.setuptools.packages.find]
 include = ["learner", "games", "server"]

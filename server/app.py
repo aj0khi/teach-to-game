@@ -12,7 +12,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from stable_baselines3 import PPO
 
-from games.runner import RunnerEnv
+from games.registry import BUILTIN_GAMES, create_game
 
 
 class TrainingController:
@@ -26,6 +26,12 @@ class TrainingController:
         self._events: deque[dict[str, Any]] = deque(maxlen=100)
         self._attempt = 0
         self._status = "stopped"
+        self._setup: dict[str, Any] = {
+            "game": "snake",
+            "algorithm": "ppo",
+            "goal": "Collect as much food as possible without crashing.",
+            "baseline": 0,
+        }
 
     @property
     def status(self) -> str:
@@ -74,6 +80,28 @@ class TrainingController:
             self._events.clear()
         return events
 
+    def setup(self, values: dict[str, Any]) -> dict[str, Any]:
+        """Validate and store the setup wizard selections."""
+        if self._thread is not None and self._thread.is_alive():
+            raise RuntimeError("Stop training before changing the setup")
+        game = str(values.get("game", "snake"))
+        algorithm = str(values.get("algorithm", "ppo"))
+        if game not in BUILTIN_GAMES:
+            raise ValueError(f"Unknown built-in game: {game}")
+        if algorithm not in {"ppo", "random"}:
+            raise ValueError(f"Unknown algorithm: {algorithm}")
+        self._setup = {
+            "game": game,
+            "algorithm": algorithm,
+            "goal": str(values.get("goal", "")).strip() or "Improve the score.",
+            "baseline": max(0, float(values.get("baseline", 0))),
+        }
+        return self._setup.copy()
+
+    def get_setup(self) -> dict[str, Any]:
+        """Return the active setup selections."""
+        return self._setup.copy()
+
     def _publish(self, event: dict[str, Any]) -> None:
         """Append an event while dropping stale events when clients lag."""
         with self._lock:
@@ -81,8 +109,13 @@ class TrainingController:
 
     def _train(self) -> None:
         """Train one controller-owned model and publish attempt metrics."""
-        environment = RunnerEnv()
-        model = PPO("MlpPolicy", environment, n_steps=128, batch_size=32, verbose=0)
+        setup = self.get_setup()
+        environment = create_game(setup["game"])
+        model = (
+            PPO("MlpPolicy", environment, n_steps=128, batch_size=32, verbose=0)
+            if setup["algorithm"] == "ppo"
+            else None
+        )
         try:
             for _ in range(100):
                 if self._stop.is_set():
@@ -94,7 +127,11 @@ class TrainingController:
                 steps = 0
                 info: dict[str, Any] = {"score": 0.0}
                 while steps < 600 and not self._stop.is_set():
-                    action, _ = model.predict(observation, deterministic=False)
+                    action = (
+                        environment.action_space.sample()
+                        if model is None
+                        else model.predict(observation, deterministic=False)[0]
+                    )
                     observation, reward, terminated, truncated, info = environment.step(
                         int(action)
                     )
@@ -103,7 +140,10 @@ class TrainingController:
                     if terminated or truncated:
                         break
                 environment.reset()
-                model.learn(total_timesteps=max(1, steps), reset_num_timesteps=False)
+                if model is not None:
+                    model.learn(
+                        total_timesteps=max(1, steps), reset_num_timesteps=False
+                    )
                 self._attempt += 1
                 self._publish(
                     {
@@ -112,6 +152,7 @@ class TrainingController:
                         "steps": steps,
                         "reward": reward_total,
                         "score": info["score"],
+                        "goal": setup["goal"],
                     }
                 )
         finally:
@@ -132,9 +173,21 @@ def index() -> FileResponse:
 
 
 @app.get("/api/status")
-def status() -> dict[str, str]:
+def status() -> dict[str, Any]:
     """Return the training controller status."""
-    return {"status": controller.status}
+    return {"status": controller.status, "setup": controller.get_setup()}
+
+
+@app.get("/api/games")
+def games() -> dict[str, Any]:
+    """List built-in games available from a fresh installation."""
+    return {"games": [{"id": key, **value} for key, value in BUILTIN_GAMES.items()]}
+
+
+@app.post("/api/setup")
+def configure(values: dict[str, Any]) -> dict[str, Any]:
+    """Save the setup wizard configuration."""
+    return {"setup": controller.setup(values)}
 
 
 @app.post("/api/{command}")

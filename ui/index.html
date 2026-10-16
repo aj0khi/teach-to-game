@@ -5,52 +5,81 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Teach to Game</title>
     <style>
-      body { font: 16px system-ui, sans-serif; margin: 2rem auto; max-width: 60rem; padding: 0 1rem; }
-      button { margin-right: .5rem; padding: .5rem .8rem; }
-      #status { font-weight: 700; }
-      canvas { border: 1px solid #aaa; display: block; height: 18rem; margin-top: 1rem; width: 100%; }
-      li { margin: .25rem 0; }
+      :root { color-scheme: dark; --bg: #10131a; --panel: #191e29; --muted: #9ca8bc; --accent: #73e0a2; }
+      * { box-sizing: border-box; }
+      body { background: radial-gradient(circle at top right, #24364b, var(--bg) 45%); color: #f5f7fb; font: 16px system-ui, sans-serif; margin: 0; }
+      main { margin: auto; max-width: 1100px; padding: 2rem 1.25rem 4rem; }
+      header { align-items: end; display: flex; justify-content: space-between; gap: 1rem; margin-bottom: 1.5rem; }
+      h1 { font-size: clamp(2rem, 6vw, 4rem); letter-spacing: -.06em; margin: 0; }
+      h2 { margin-top: 0; } p { color: var(--muted); }
+      .grid { display: grid; gap: 1rem; grid-template-columns: minmax(260px, 340px) 1fr; }
+      .panel { background: color-mix(in srgb, var(--panel) 92%, transparent); border: 1px solid #2d384b; border-radius: 18px; padding: 1.25rem; box-shadow: 0 12px 36px #0003; }
+      label { color: var(--muted); display: block; font-size: .85rem; margin: .9rem 0 .35rem; }
+      input, select, textarea { background: #0f141d; border: 1px solid #364359; border-radius: 9px; color: white; padding: .7rem; width: 100%; }
+      textarea { min-height: 5rem; resize: vertical; }
+      button { background: #273248; border: 1px solid #465776; border-radius: 9px; color: white; cursor: pointer; font-weight: 650; padding: .65rem .9rem; }
+      button:hover { border-color: var(--accent); } button.primary { background: #1d7048; border-color: #73e0a2; }
+      .actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
+      .status { color: var(--accent); font-weight: 750; text-transform: capitalize; }
+      .metrics { display: grid; gap: .75rem; grid-template-columns: repeat(3, 1fr); margin: 1rem 0; }
+      .metric { background: #101620; border-radius: 12px; padding: .8rem; } .metric strong { display: block; font-size: 1.5rem; }
+      canvas { background: #0c1119; border: 1px solid #2d384b; border-radius: 12px; display: block; height: 300px; width: 100%; }
+      ol { max-height: 14rem; overflow: auto; padding-left: 1.4rem; } li { margin: .4rem 0; }
+      .notice { background: #2b2414; border: 1px solid #80672f; border-radius: 10px; color: #f4d78e; padding: .75rem; }
+      @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } header { align-items: start; display: block; } }
     </style>
   </head>
   <body>
-    <h1>Teach to Game</h1>
-    <p>Status: <span id="status">stopped</span></p>
-    <button data-command="start">Start</button>
-    <button data-command="pause">Pause</button>
-    <button data-command="resume">Resume</button>
-    <button data-command="stop">Stop</button>
-    <canvas id="chart" width="800" height="280"></canvas>
-    <h2>Attempts</h2>
-    <ol id="attempts"></ol>
+    <main>
+      <header>
+        <div><p>LOCAL REINFORCEMENT LEARNING LAB</p><h1>Teach to Game</h1><p>Choose a game, explain the goal, and watch an agent learn on your computer.</p></div>
+        <div class="status" id="status">stopped</div>
+      </header>
+      <div class="grid">
+        <section class="panel">
+          <h2>Setup</h2>
+          <p>Start with Snake: it runs locally and needs no external game window.</p>
+          <label for="game">Game</label><select id="game"></select>
+          <label for="algorithm">Learning strategy</label>
+          <select id="algorithm"><option value="ppo">PPO (learn from trial and error)</option><option value="random">Random baseline</option></select>
+          <label for="goal">Your goal</label>
+          <textarea id="goal">Collect as much food as possible without crashing.</textarea>
+          <label for="baseline">Baseline score</label><input id="baseline" type="number" min="0" value="0">
+          <div class="actions"><button class="primary" id="save">Save setup</button></div>
+          <div class="notice" style="margin-top:1rem">Safety: built-in games run locally. Browser and downloaded-game adapters will require explicit capture and key permissions.</div>
+        </section>
+        <section class="panel">
+          <h2 id="game-title">Training dashboard</h2>
+          <div class="metrics">
+            <div class="metric">Attempts<strong id="attempt-count">0</strong></div>
+            <div class="metric">Best score<strong id="best-score">0</strong></div>
+            <div class="metric">Last reward<strong id="last-reward">0</strong></div>
+          </div>
+          <div class="actions">
+            <button class="primary" data-command="start">Start learning</button>
+            <button data-command="pause">Pause</button><button data-command="resume">Resume</button><button data-command="stop">Stop</button>
+          </div>
+          <canvas id="chart" width="900" height="300"></canvas>
+          <h2>Recent attempts</h2><ol id="attempts"></ol>
+        </section>
+      </div>
+    </main>
     <script>
-      const status = document.querySelector("#status");
-      const attempts = document.querySelector("#attempts");
-      const chart = document.querySelector("#chart");
-      const values = [];
-      for (const button of document.querySelectorAll("button")) {
-        button.onclick = async () => {
-          const response = await fetch(`/api/${button.dataset.command}`, { method: "POST" });
-          status.textContent = (await response.json()).status;
-        };
+      const $ = (selector) => document.querySelector(selector);
+      const values = []; let best = 0;
+      async function loadSetup() {
+        const response = await fetch("/api/games"); const data = await response.json();
+        for (const game of data.games) { const option = document.createElement("option"); option.value = game.id; option.textContent = `${game.name} — ${game.description}`; $("#game").append(option); }
+        const current = await (await fetch("/api/status")).json(); applySetup(current.setup);
       }
+      function applySetup(setup) { $("#game").value = setup.game; $("#algorithm").value = setup.algorithm; $("#goal").value = setup.goal; $("#baseline").value = setup.baseline; $("#game-title").textContent = `${$("#game").selectedOptions[0]?.textContent.split(" — ")[0] || "Game"} dashboard`; }
+      $("#save").onclick = async () => { const response = await fetch("/api/setup", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({game: $("#game").value, algorithm: $("#algorithm").value, goal: $("#goal").value, baseline: $("#baseline").value}) }); applySetup((await response.json()).setup); };
+      for (const button of document.querySelectorAll("[data-command]")) button.onclick = async () => { const response = await fetch(`/api/${button.dataset.command}`, {method: "POST"}); $("#status").textContent = (await response.json()).status; };
+      $("#game").onchange = () => { $("#game-title").textContent = `${$("#game").selectedOptions[0].textContent.split(" — ")[0]} dashboard`; };
       const socket = new WebSocket(`ws://${location.host}/ws`);
-      socket.onmessage = (message) => {
-        const event = JSON.parse(message.data);
-        if (event.type !== "attempt") return;
-        values.push(event.reward);
-        const item = document.createElement("li");
-        item.textContent = `Attempt ${event.attempt}: ${event.steps} steps, reward ${event.reward.toFixed(2)}`;
-        attempts.prepend(item);
-        const context = chart.getContext("2d");
-        context.clearRect(0, 0, chart.width, chart.height);
-        context.beginPath();
-        values.forEach((value, index) => {
-          const x = index * chart.width / Math.max(values.length - 1, 1);
-          const y = chart.height - Math.max(0, value) * 2;
-          index ? context.lineTo(x, y) : context.moveTo(x, y);
-        });
-        context.stroke();
-      };
+      socket.onmessage = (message) => { const event = JSON.parse(message.data); if (event.type !== "attempt") return; values.push(event.reward); best = Math.max(best, event.score); $("#attempt-count").textContent = event.attempt; $("#best-score").textContent = best.toFixed(1); $("#last-reward").textContent = event.reward.toFixed(2); const item = document.createElement("li"); item.textContent = `Attempt ${event.attempt}: score ${event.score.toFixed(1)}, reward ${event.reward.toFixed(2)}`; $("#attempts").prepend(item); draw(); };
+      function draw() { const canvas = $("#chart"), context = canvas.getContext("2d"); context.clearRect(0, 0, canvas.width, canvas.height); context.strokeStyle = "#73e0a2"; context.lineWidth = 3; context.beginPath(); values.forEach((value, index) => { const x = index * canvas.width / Math.max(values.length - 1, 1); const y = canvas.height - Math.max(0, value) * 2 - 10; index ? context.lineTo(x, y) : context.moveTo(x, y); }); context.stroke(); }
+      loadSetup();
     </script>
   </body>
 </html>
