@@ -55,3 +55,12 @@ def test_frame_events_keep_only_the_newest_frame() -> None:
     controller._publish({"type": "frame", "pixels": "new"})
     events = controller.snapshot()
     assert events == [{"type": "frame", "pixels": "new"}]
+
+
+def test_watch_speed_controls_presentation_pace() -> None:
+    """Watch speed accepts the documented human-readable playback choices."""
+    with TestClient(app) as client:
+        slow = client.post("/api/watch-speed", json={"speed": 0.5})
+        fast = client.post("/api/watch-speed", json={"speed": 2})
+    assert slow.json() == {"watch_speed": 0.5}
+    assert fast.json() == {"watch_speed": 2.0}

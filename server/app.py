@@ -45,7 +45,7 @@ class LiveTrainingCallback(BaseCallback):
         if self.attempt_steps % 2 == 0 or self.locals["dones"][0]:
             frame = self.training_env.env_method("render")[0]
             self.controller.publish_frame(frame, action, reward, info.get("score", 0.0))
-            time.sleep(0.04)
+            time.sleep(self.controller.frame_delay())
         if self.locals["dones"][0]:
             self.attempt += 1
             self.controller.publish_attempt(
@@ -54,6 +54,7 @@ class LiveTrainingCallback(BaseCallback):
                 self.attempt_reward,
                 float(info.get("score", 0.0)),
             )
+            time.sleep(0.8 / self.controller.watch_speed)
             self.attempt_steps = 0
             self.attempt_reward = 0.0
         return True
@@ -71,6 +72,7 @@ class TrainingController:
         self._latest_frame: dict[str, Any] | None = None
         self._attempt = 0
         self._status = "stopped"
+        self._watch_speed = 1.0
         self._setup: dict[str, Any] = {
             "game": "snake",
             "algorithm": "ppo",
@@ -153,6 +155,24 @@ class TrainingController:
     def get_setup(self) -> dict[str, Any]:
         """Return the active setup selections."""
         return self._setup.copy()
+
+    def set_watch_speed(self, speed: float) -> float:
+        """Set the human-facing playback pace without changing game physics."""
+        if speed not in {0.5, 1.0, 2.0}:
+            raise ValueError("Watch speed must be 0.5, 1.0, or 2.0")
+        with self._lock:
+            self._watch_speed = speed
+        return speed
+
+    @property
+    def watch_speed(self) -> float:
+        """Return the current dashboard playback pace."""
+        with self._lock:
+            return self._watch_speed
+
+    def frame_delay(self) -> float:
+        """Return the delay between visible frames at the selected watch speed."""
+        return 0.12 / self.watch_speed
 
     def _publish(self, event: dict[str, Any]) -> None:
         """Append an event while dropping stale events when clients lag."""
@@ -240,10 +260,11 @@ class TrainingController:
                     self.publish_frame(
                         environment.render(), action, reward, info["score"]
                     )
-                    time.sleep(0.04)
+                    time.sleep(self.frame_delay())
                 if terminated or truncated:
                     break
             self.publish_attempt(self._attempt + 1, steps, reward_total, info["score"])
+            time.sleep(0.8 / self.watch_speed)
 
 
 app = FastAPI(title="Teach to Game")
@@ -260,7 +281,11 @@ def index() -> FileResponse:
 @app.get("/api/status")
 def status() -> dict[str, Any]:
     """Return the training controller status."""
-    return {"status": controller.status, "setup": controller.get_setup()}
+    return {
+        "status": controller.status,
+        "setup": controller.get_setup(),
+        "watch_speed": controller.watch_speed,
+    }
 
 
 @app.get("/api/games")
@@ -273,6 +298,12 @@ def games() -> dict[str, Any]:
 def configure(values: dict[str, Any]) -> dict[str, Any]:
     """Save the setup wizard configuration."""
     return {"setup": controller.setup(values)}
+
+
+@app.post("/api/watch-speed")
+def watch_speed(values: dict[str, float]) -> dict[str, float]:
+    """Change the visible playback pace."""
+    return {"watch_speed": controller.set_watch_speed(float(values["speed"]))}
 
 
 @app.post("/api/{command}")

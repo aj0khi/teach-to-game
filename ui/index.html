@@ -30,6 +30,8 @@
       .live-dot { background: #73e0a2; border-radius: 50%; display: inline-block; height: .55rem; margin-right: .35rem; width: .55rem; }
       ol { max-height: 14rem; overflow: auto; padding-left: 1.4rem; } li { margin: .4rem 0; }
       .notice { background: #2b2414; border: 1px solid #80672f; border-radius: 10px; color: #f4d78e; padding: .75rem; }
+      .watch { align-items: center; display: flex; gap: .6rem; justify-content: space-between; margin: 1rem 0; }
+      .watch select { max-width: 10rem; }
       @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } header { align-items: start; display: block; } }
     </style>
   </head>
@@ -63,6 +65,7 @@
             <button class="primary" data-command="start">Start learning</button>
             <button data-command="pause">Pause</button><button data-command="resume">Resume</button><button data-command="stop">Stop</button>
           </div>
+          <div class="watch"><span><strong>Watch speed</strong><br><small>Only changes the presentation pace, not the game's physics.</small></span><select id="watch-speed"><option value="0.5">Slow — easier to follow</option><option value="1" selected>Normal</option><option value="2">Fast</option></select></div>
           <div class="live-view"><div><span class="live-dot"></span> LIVE GAME VIEW</div><canvas id="game-view" width="300" height="300"></canvas><p id="action">Waiting for the first action…</p></div>
           <canvas id="chart" width="900" height="300"></canvas>
           <h2>Recent attempts</h2><ol id="attempts"></ol>
@@ -79,6 +82,7 @@
       }
       function applySetup(setup) { $("#game").value = setup.game; $("#algorithm").value = setup.algorithm; $("#goal").value = setup.goal; $("#baseline").value = setup.baseline; $("#game-title").textContent = `${$("#game").selectedOptions[0]?.textContent.split(" — ")[0] || "Game"} dashboard`; }
       $("#save").onclick = async () => { const response = await fetch("/api/setup", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({game: $("#game").value, algorithm: $("#algorithm").value, goal: $("#goal").value, baseline: $("#baseline").value}) }); applySetup((await response.json()).setup); };
+      $("#watch-speed").onchange = async () => { await fetch("/api/watch-speed", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({speed: Number($("#watch-speed").value)}) }); };
       for (const button of document.querySelectorAll("[data-command]")) button.onclick = async () => { const response = await fetch(`/api/${button.dataset.command}`, {method: "POST"}); $("#status").textContent = (await response.json()).status; };
       $("#game").onchange = () => { $("#game-title").textContent = `${$("#game").selectedOptions[0].textContent.split(" — ")[0]} dashboard`; };
       const socket = new WebSocket(`ws://${location.host}/ws`);
