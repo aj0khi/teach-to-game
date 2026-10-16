@@ -102,6 +102,7 @@ class TrainingController:
                     steps += 1
                     if terminated or truncated:
                         break
+                environment.reset()
                 model.learn(total_timesteps=max(1, steps), reset_num_timesteps=False)
                 self._attempt += 1
                 self._publish(
